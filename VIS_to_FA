@@ -1,0 +1,522 @@
+#!/usr/bin/env python
+
+##################################
+###                            ###
+###  VIS to FA CSV Translation ###
+###                            ###
+##################################
+#
+# Purpose:
+# Take expense data from the Visa system (VIS) and convert
+# it into a CSV format that Front Accounting (FA) will import.
+#
+# Input CSV format for Credit Card Transactions:
+# Fund Type, Cardholder ID, Expense Account Number, Fund, Description,
+# Expense Account Name, Billing Period End Date, Transaction Date,
+# Posted Date, Amount, Budget Name, Approver, Cardholder Name, Seller
+#
+# Input CSV format for Non-Credit Card (aka Expense Report) Transactions:
+# Expense Report Name, Fund Type, Cardholder ID, Expense Account Number,
+# Fund, Description, Transaction Date, Submitted Date, Amount, Budget Name,
+# Approver, Cardholder Name
+#
+# Output CSV format for FrontAccounting:
+# Entry ID, Date, Reference, Account code, Fund (Dimension 1), Dimension 2,
+# Amount, Memo
+
+import csv
+import subprocess
+import sys
+import os
+import os.path
+import shutil
+import time
+import textwrap
+from decimal import *
+
+# General purpose Warning function that uses Zenity
+def warning(title, text):
+    subprocess.call(['zenity', '--warning', '--title', "Warning: " + title, '--text', "Warning: " + text])
+
+# General purpose Error function that uses Zenity
+def error(title, text, returncode):
+    subprocess.call(['zenity', '--error', '--title', "ERROR: " + title, '--text', "ERROR: " + text + "\n\nPlease fix the problem and try again."])
+    sys.exit(returncode)
+
+
+####################
+# Define constants #
+####################
+
+# Location of input and ouput CSV files
+INPUT_PATH = '/home/share/Operations/Ministry Expenses/VIM/'
+OUTPUT_PATH = '/home/share/frontaccounting/'
+INPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS Extractions/'
+OUTPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS FA Imports/'
+TRANSACTION_FILE = 'vis_transactions_export.csv'
+CARDHOLDER_ID_FILE = 'cardholder_id.csv'
+OUTPUT_FILE = 'VISToFrontAccounting.csv'
+# Test Paths
+#INPUT_PATH = 'orig/'
+#OUTPUT_PATH = './'
+#INPUT_ARCHIVE_BASE_PATH = 'archive_input/'
+#OUTPUT_ARCHIVE_BASE_PATH = 'archive_output/'
+
+# Types of transaction files we can handle
+CC = 0  # Credit Card
+ER = 1  # Expense Report
+
+# Human readable names of different transaction files we can handle
+transaction_file_type_name = { CC: "Credit Card",
+                               ER: "Expense Report"}
+
+# Accounts Payable Information for Credit Card data
+AP_CC_ACCOUNT = '20100'
+AP_CC_DIMENSION_1 = ''
+AP_CC_DIMENSION_2 = 'AP - BOA'
+AP_CC_MEMO = 'A/P- BOA'
+
+# Accounts Payable Information for Expense Report data
+AP_ER_ACCOUNT = '20100'
+AP_ER_DIMENSION_1 = ''
+AP_ER_DIMENSION_2 = 'AP - Exp Report'
+AP_ER_MEMO = 'A/P - Exp Report'
+
+# Accounts Receivable Information for accidental personal Credit Card purchases
+AR_PERSONAL_ACCOUNT = '10300'
+AR_PERSONAL_DIMENSION_1 = ''
+AR_PERSONAL_DIMENSION_2 = 'ARCC'
+AR_PERSONAL_MEMO = 'A/R- Personal Expense'
+
+# Book Table Information (aka "Inventory")
+BOOKTABLE_ACCOUNT = '10400'
+BOOKTABLE_DIMENSION_1 = ''
+BOOKTABLE_DIMENSION_2 = ''
+
+# Column Names
+FUND_TYPE = "Fund Type"
+CARDHOLDER_ID = "Cardholder ID"
+EXPENSE_ACCOUNT_NUM = "Expense Account Number"
+FUND = "Fund"
+DESCRIPTION = "Description"
+EXPENSE_ACCOUNT_NAME = "Expense Account Name"
+BILLING_PERIOD_END_DATE = "Billing Period End Date"
+TRANSACTION_DATE = "Transaction Date"
+POSTED_DATE = "Posted Date"
+AMOUNT = "Amount"
+BUDGET_NAME = "Budget Name"
+APPROVER = "Approver"
+CARDHOLDER_NAME = "Cardholder Name"
+SELLER = "Seller"
+EXPENSE_REPORT_NAME = "Expense Report Name"
+SUBMITTED_DATE = "Submitted Date"
+
+# Column Order - Credit Card input files
+columns = {CC: { CARDHOLDER_ID: 0,
+                EXPENSE_ACCOUNT_NUM: 1,
+                FUND: 2,
+                DESCRIPTION: 3,
+                EXPENSE_ACCOUNT_NAME: 4,
+                BILLING_PERIOD_END_DATE: 5,
+                TRANSACTION_DATE: 6,
+                POSTED_DATE: 7,
+                AMOUNT: 8,
+                BUDGET_NAME: 9,
+                APPROVER: 10,
+                CARDHOLDER_NAME: 11,
+                SELLER: 12 },
+# Column Order - Expense Report input files
+           ER: { EXPENSE_REPORT_NAME: 0,
+                FUND_TYPE: 1,
+                CARDHOLDER_ID: 2,
+                EXPENSE_ACCOUNT_NUM: 3,
+                FUND: 4,
+                DESCRIPTION: 5,
+                TRANSACTION_DATE: 6,
+                SUBMITTED_DATE: 7,
+                AMOUNT: 8,
+                BUDGET_NAME: 9,
+                APPROVER: 10,
+                CARDHOLDER_NAME: 11 }}
+
+
+######################
+# Remove Output File #
+######################
+
+# Remove it out now so that in case this program doesn't run successfully
+# the user can't accidentally re-use the output from the last successful
+# run, whenever that was.
+if os.path.exists(OUTPUT_PATH + OUTPUT_FILE):
+    try:
+        os.remove(OUTPUT_PATH + OUTPUT_FILE)
+    except OSError, err_data:
+        pass  # Ignore for now, but that doesn't bode well for writing real output
+
+######################
+# Verify Input Files #
+######################
+
+# Make sure that required data files exist
+for name in [ CARDHOLDER_ID_FILE, TRANSACTION_FILE ]:
+    if not os.path.exists(INPUT_PATH + name):
+        error("Missing Input File", "ERROR: Required input file " + name + " doesn't exist in the folder " + INPUT_PATH + " or isn't named correctly.", 1)
+
+# Get modification date of transaction file
+transaction_file_date = time.strftime("%A, %B %d, %Y at %I:%M%p", time.localtime(os.path.getmtime(INPUT_PATH + TRANSACTION_FILE)))
+
+# Open CSV data files 
+cardholder_csv_data = csv.reader(file(INPUT_PATH + CARDHOLDER_ID_FILE) )
+transaction_csv_data = csv.reader(file(INPUT_PATH + TRANSACTION_FILE))
+
+# Make a convenient list of Cardholder IDs
+# Note: we only care about the ID itself, i.e. the first column
+cardholder_id_list = []
+for cardholder in cardholder_csv_data:
+    # Ignore any duplicates
+    if cardholder[0] not in cardholder_id_list:
+        cardholder_id_list.append(cardholder[0])
+
+# Make a convenient list of the Transactions
+transaction_list = [] 
+for transaction in transaction_csv_data:
+    transaction_list.append(transaction)
+
+# Test to see if either of the input files are empty.
+if len(cardholder_id_list) < 2:
+    error("Empty Input File", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " is empty.", 1)
+if len(transaction_list) < 2:
+    error("Empty Input File", "Input file " + INPUT_PATH + TRANSACTION_FILE + " is empty.", 1)
+
+# Do a basic verification of correctness of Cardholder ID data
+if cardholder_id_list[0] != "CARDHOLDER_ID_0":
+    error("Unexpected Cardholder ID Format", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " doesn't appear to contain Cardholder ID data.  Unable to continue.", 1)
+
+# Figure out if we're dealing with Credit Card or non-Credit Card Transactions
+if transaction_list[0][0] == "CARDHOLDER_ID_0":
+    transaction_file_type = CC
+elif transaction_list[0][0] == "REPORT_NAME_0":
+    transaction_file_type = ER
+else:
+    error("Unexpected Transaction Format", "Input file " + INPUT_PATH + TRANSACTION_FILE + " doesn't appear to contain Credit Card or Expense Report data.  Unable to continue.", 1)
+    
+# Remove the CSV Headers row from each list
+del cardholder_id_list[0]
+del transaction_list[0]
+
+
+##############################
+# Get Session Data From User #
+##############################
+
+# Notify user of what we found - Number and type of transactions and file timestamp
+# Give them a chance to back out if it's not what they expected
+proceed = subprocess.call(['zenity', '--question', '--title', 'Verify VIS Export Basic Info', '--text', 
+                           'Found a VIS export file with ' + str(len(transaction_list)) + ' ' + transaction_file_type_name[transaction_file_type] + ' transactions saved on ' + transaction_file_date + '.\n\n<b><big>Do you want to continue?</big></b>',
+                           '--ok-label', 'Continue', '--cancel-label', 'Stop'])
+# User said they don't want to proceed
+if proceed == 1:
+    sys.exit(1)
+
+
+# Accounting entry posting date
+accounting_entry_date_process = subprocess.Popen((['zenity', '--calendar', '--title', 'Select Posting Date', '--text', 
+                           'Select date when the transactions will be posted in the accounting system.']),
+                           stdout=subprocess.PIPE)
+accounting_entry_date_process.wait()
+
+# User clicked Cancel button
+if accounting_entry_date_process.returncode == 1:
+    sys.exit(1)
+
+# collect date the user selected
+accounting_entry_date = accounting_entry_date_process.communicate()[0].strip()
+
+
+# Build Reference Number prefix from the accounting post date.
+# Format: MM-DD-YY-
+accounting_entry_date_split = accounting_entry_date.split('/')
+accounting_entry_date_year = accounting_entry_date_split[2]
+accounting_entry_date_month = accounting_entry_date_split[0]
+accounting_entry_date_day = accounting_entry_date_split[1]
+reference_number_prefix = accounting_entry_date_month + '/' + accounting_entry_date_day + '/' + accounting_entry_date_year[2:] + '-'
+
+
+# Reference Number Suffix starting point
+reference_number_suffix_process = subprocess.Popen((['zenity', '--entry', '--title', 'Select Starting Reference Number', '--text', 
+                           'What is the starting reference number? ' + reference_number_prefix + '? ']),
+                           stdout=subprocess.PIPE)
+reference_number_suffix_process.wait()
+
+# User clicked Cancel button
+if reference_number_suffix_process.returncode == 1:
+    sys.exit(1)
+
+# collect starting number the user entered
+try:
+    reference_number_suffix = int(reference_number_suffix_process.communicate()[0].strip())
+except:
+    error("Invalid Starting Number", "You either didn't enter a starting reference number or it wasn't recognized for some reason.", 1)
+
+
+######################################
+# Convert & Assemble the Output Data #
+######################################
+
+# List variable to collect output data
+output_list = []
+
+# Output Headers
+output_list.append([ 'Entry ID', 'Transaction Date', 'Reference Number',
+                      'G/L Account', 'Dimension 1', 'Dimension 2', 'Amount',
+                      'Memo' ])
+
+# Track current cardholder number for Entry ID purposes
+# Note: Entry IDs should start at 1
+cardholder_counter = 1
+
+# We'll handle one person at a time.
+for cardholder in cardholder_id_list:
+    # Keep track of the total amount per person (negative amount for
+    # proper accounting purposes)
+    cardholder_sum = 0
+    
+    # Keep track of equivalent line number in Transaction input file
+    # for warning reporting purposes - start at 1 because of Headers line
+    line = 1
+
+    # Look through all transactions for the ones belonging to the current person
+    for transaction in transaction_list:
+
+        # Next transaction/line
+        line += 1
+
+        # Deal with blank amounts...
+        # Ignore special case transactions that we expect, and warn about others
+        if transaction[columns[transaction_file_type][AMOUNT]] == '':
+            # Only warn during first loop through transactions (i.e. first cardholder)
+            if cardholder_counter == 1:
+                # Expected blank amount:
+                # Confirmation of payment on Credit Card exports
+                # Criteria: blank amount, blank approver and Cardholder Name is "DISCIPLEMAKERS INC."
+                if transaction[columns[transaction_file_type][APPROVER]] != '' or transaction[columns[transaction_file_type][CARDHOLDER_NAME]] != 'DISCIPLEMAKERS INC.':
+                    warning("Unexpected Transaction with Blank Amount",
+                            "The transaction on <b>line " + str(line) + " has a blank amount</b> and is unrecognized. \
+That probably means there's something wrong with the export.  We'll ignore that line and proceed though.\n\n\
+<b><u>Transaction details</u></b>\n<b>Transaction Date:</b> " + transaction[columns[transaction_file_type][TRANSACTION_DATE]] +
+"\n<b>Cardholder Name:</b> " + transaction[columns[transaction_file_type][CARDHOLDER_NAME]] +
+"\n<b>Fund:</b> " + transaction[columns[transaction_file_type][FUND]] +
+"\n<b>Description:</b> " + transaction[columns[transaction_file_type][DESCRIPTION]])
+            continue
+
+        if transaction[columns[transaction_file_type][CARDHOLDER_ID]] == cardholder:
+            cardholder_sum += Decimal(transaction[columns[transaction_file_type][AMOUNT]])*-1
+
+            # Assemble all the output data for this transaction
+
+            Entry_ID = cardholder_counter
+
+            Date = accounting_entry_date
+
+            Reference = reference_number_prefix + str(reference_number_suffix)
+
+            if transaction[columns[transaction_file_type][EXPENSE_ACCOUNT_NUM]] == "":
+                error("Transaction is Missing Required Expense Account Number",
+                        "The transaction on <b>line " + str(line) + " has a blank expense account number</b> and that's not allowed. \
+That means it should not have been approved, or else this program needs to be updated.  Please fix data in VIS and re-export.\n\n\
+<b><u>Transaction details</u></b>\n<b>Transaction Date:</b> " + transaction[columns[transaction_file_type][TRANSACTION_DATE]] +
+"\n<b>Cardholder Name:</b> " + transaction[columns[transaction_file_type][CARDHOLDER_NAME]] +
+"\n<b>Fund:</b> " + transaction[columns[transaction_file_type][FUND]] +
+"\n<b>Description:</b> " + transaction[columns[transaction_file_type][DESCRIPTION]], 1)
+            else:
+                Account = transaction[columns[transaction_file_type][EXPENSE_ACCOUNT_NUM]]
+
+            # Handle some special cases for fund & dimension 2
+            if Account == AR_PERSONAL_ACCOUNT:
+                Dimension1 = AR_PERSONAL_DIMENSION_1
+                Dimension2 = AR_PERSONAL_DIMENSION_2
+            elif Account == BOOKTABLE_ACCOUNT:
+                Dimension1 = BOOKTABLE_DIMENSION_1
+                Dimension2 = BOOKTABLE_DIMENSION_2
+            else:
+                if transaction[columns[transaction_file_type][FUND]] == "":
+                    error("Transaction is Missing Required Fund",
+                            "The transaction on <b>line " + str(line) + " has a blank fund</b> and that's not allowed for this transaction. \
+That means it should not have been approved, or else this program needs to be updated.  Please fix data in VIS and re-export.\n\n\
+<b><u>Transaction details</u></b>\n<b>Transaction Date:</b> " + transaction[columns[transaction_file_type][TRANSACTION_DATE]] +
+"\n<b>Cardholder Name:</b> " + transaction[columns[transaction_file_type][CARDHOLDER_NAME]] +
+"\n<b>Description:</b> " + transaction[columns[transaction_file_type][DESCRIPTION]], 1)
+                else:
+                    Dimension1 = transaction[columns[transaction_file_type][FUND]]
+                    Dimension2 = transaction[columns[transaction_file_type][BUDGET_NAME]]
+
+            Amount = transaction[columns[transaction_file_type][AMOUNT]]
+
+            # The Memo data is another special case
+            if transaction_file_type == CC:
+                if Account == AR_PERSONAL_ACCOUNT:
+                    Memo = AR_PERSONAL_MEMO + '" on ' + transaction[columns[transaction_file_type][TRANSACTION_DATE]] + \
+                    ' posted ' + transaction[columns[transaction_file_type][POSTED_DATE]] 
+                else:
+                    Memo = transaction[columns[transaction_file_type][CARDHOLDER_NAME]] + \
+                    ' bought (' + transaction[columns[transaction_file_type][DESCRIPTION]] + \
+                    ') from "' + transaction[columns[transaction_file_type][SELLER]][:15] + \
+                    '" on ' + transaction[columns[transaction_file_type][TRANSACTION_DATE]] + \
+                    ' posted ' + transaction[columns[transaction_file_type][POSTED_DATE]] + \
+                    ' / ' + transaction[columns[transaction_file_type][APPROVER]]
+            elif transaction_file_type == ER:
+                Memo = transaction[columns[transaction_file_type][CARDHOLDER_NAME]] + \
+                ' bought (' + transaction[columns[transaction_file_type][DESCRIPTION]] + \
+                ') on ' + transaction[columns[transaction_file_type][TRANSACTION_DATE]] + \
+                ' submitted ' + transaction[columns[transaction_file_type][SUBMITTED_DATE]] + \
+                ' in Expense Report "' + transaction[columns[transaction_file_type][EXPENSE_REPORT_NAME]] + \
+                '" / ' + transaction[columns[transaction_file_type][APPROVER]]
+
+            # Add all this data to the output
+            output_list.append([Entry_ID, Date, Reference, Account, Dimension1, Dimension2, Amount, Memo])
+
+
+    # Each person with expenses gets a balancing A/P entry
+    if cardholder_sum != 0:                            
+        Entry_ID = cardholder_counter
+        Date = accounting_entry_date
+        Reference = reference_number_prefix + str(reference_number_suffix)
+        if transaction_file_type == CC:
+            Account = AP_CC_ACCOUNT
+            Dimension1 = AP_CC_DIMENSION_1
+            Dimension2 = AP_CC_DIMENSION_2
+            Memo = AP_CC_MEMO
+        elif transaction_file_type == ER:
+            Account = AP_ER_ACCOUNT
+            Dimension1 = AP_ER_DIMENSION_1
+            Dimension2 = AP_ER_DIMENSION_2
+            Memo = AP_ER_MEMO
+        Amount = cardholder_sum
+        # Add all this data to the output
+        output_list.append([Entry_ID, Date, Reference, Account, Dimension1, Dimension2, Amount, Memo])
+
+        # Next Cardholder coming up!
+        # Note: only increment for people that had any transactions
+        cardholder_counter += 1
+                  
+        # Reference number needs to increase with each cardholder
+        # (they each get one big split entry in the accounting system)
+        # Note: only increment for people that had any transactions
+        reference_number_suffix += 1
+ 
+
+#################################################################################
+# Calculate total amounts of input and output to reassure user that all is well #
+#################################################################################
+input_total = Decimal('0.0')
+output_total = Decimal('0.0')
+for transaction in transaction_list:
+    if transaction[columns[transaction_file_type][AMOUNT]] != '':
+        input_total += Decimal(transaction[columns[transaction_file_type][AMOUNT]])
+
+counter = 0
+for transaction in output_list:
+    if counter > 0:
+        memo = transaction[7]
+        amount = transaction[6]
+        if memo != AP_CC_MEMO and memo != AP_ER_MEMO:
+            output_total += Decimal(amount)
+    counter += 1
+
+if input_total.compare(output_total) != Decimal('0'):
+    error("VIS & FA Total Amounts Don't Match", "The total amount of the VIS Export transactions doesn't match the total amount of the FA Import transactions.  This shouldn't happen.  Seek help from the Systems Dept.\n\nVIS Export Total Amount: $" + str(input_total) + "\nFA Import Total Amount: $" + str(output_total) + "\n\nNote: FA Import file was NOT saved.", 1)
+
+
+####################
+# Write Output CSV #
+####################
+try:
+    output_file = open(OUTPUT_PATH + OUTPUT_FILE,'w')
+    output_file_csv = csv.writer(output_file)
+except IOError, err_data:
+    error("Unable to Create FA Import File", "Unable to create main FA Import!  Attemped to create file " + OUTPUT_FILE + " in folder " + OUTPUT_PATH + "  If the following low-level error message doesn't mean much to you, please show it to the Systems Dept for further help:\n\n" + str(err_data), 1)
+output_file_csv.writerows(output_list)
+output_file.close()
+
+
+###########################################
+# Make Archive Copies of Input and Output #
+###########################################
+# Control whether we should make archive copies
+make_archive_copies = True
+
+# Figure out filename
+archive_filename = accounting_entry_date_year + '_' + accounting_entry_date_month + '_' + accounting_entry_date_day + '_' + transaction_file_type_name[transaction_file_type].replace(" ", "_") + ".csv"
+
+# Figure out paths
+input_archive_path = INPUT_ARCHIVE_BASE_PATH + accounting_entry_date_year + os.sep
+output_archive_path = OUTPUT_ARCHIVE_BASE_PATH + accounting_entry_date_year + os.sep
+
+# Make sure that archive paths, including subdirectories for year, exist and try to create them if they don't.
+for archive_path in [input_archive_path, output_archive_path]:
+    if not os.path.exists(archive_path):
+        try:
+            os.mkdir(archive_path)
+        except (IOError, OSError), err_data:
+            make_archive_copies = False
+            if archive_path == input_archive_path:
+                warning("VIS Data Archive Folder Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the VIS Data failed because the archive folder location " + input_archive_path + "doesn't exist and an attempt to create it has failed due to the following low-level error:\n\n" + str(err_data))
+            else:
+                warning("FA Data Archive Folder Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the FA Data failed because the archive folder location " + output_archive_path + "doesn't exist and an attempt to create it has failed due to the following low-level error:\n\n" + str(err_data))
+
+# Define user options for handling an archive filename conflict
+OPTION_QUIT = "Quit without archiving so I can start over"
+OPTION_OVERWRITE = "Overwrite the existing archive files, I know what I'm doing"
+OPTION_NEW_NAME = "Create new archive files, this is different data for the same date & type"
+
+# Ask the user what to do if either archive file already exists
+if make_archive_copies and (os.path.exists(input_archive_path + archive_filename) or os.path.exists(output_archive_path + archive_filename)):
+    archive_filename_in_use_process = subprocess.Popen(['zenity', '--list', '--radiolist', '--title', 'Archive Filename Is In Use', '--text', 
+                               "<b>The main FA Import file was created and is ready to be imported into FrontAccounting.\nHowever, the filename where the VIS export file or FA Import file would be archived already exists.</b>\n\n" + textwrap.fill("If you're redoing a VIS to FA conversion then it's fine to overwrite what's already there.  But if that's not the case, it probably means that you selected the wrong Posting Date for when entries will be posted in the Accounting System in which case it would be best to quit and start over.  Or it could be that you actually have different data of the same kind for the same posting date, in which case it would be best to save under a different name.", 100, replace_whitespace=False) + "\n\n<b><big>What would you like to do?</big></b>",
+                               '--hide-header', '--column', 'col1', '--column', 'col2', 'FALSE', OPTION_QUIT, 'TRUE', OPTION_OVERWRITE, "FALSE", OPTION_NEW_NAME], stdout=subprocess.PIPE)
+    archive_filename_in_use_process.wait()
+
+    # User clicked Cancel button
+    if archive_filename_in_use_process.returncode == 1:
+        make_archive_copies = False
+        warning("Archives Were Not Made", "Archive copies of VIS Export and FA Import data were not made automatically.")
+    else:
+        # Collect the option the user selected
+        archive_filename_in_use_choice = archive_filename_in_use_process.communicate()[0].strip()
+    
+        # Handle user's choice
+        if archive_filename_in_use_choice == OPTION_QUIT:
+            sys.exit(1)
+        elif archive_filename_in_use_choice == OPTION_OVERWRITE:
+            pass
+        elif archive_filename_in_use_choice == OPTION_NEW_NAME:
+            try:
+                int(archive_filename[-5:-4])
+            except (TypeError, ValueError):
+                # Add a "-2" to end of filename to indicate it's the second one
+                archive_filename = accounting_entry_date_year + '_' + accounting_entry_date_month + '_' + accounting_entry_date_day + '_' + transaction_file_type_name[transaction_file_type].replace(" ", "_") + "-2" + ".csv"
+            finally:
+                # If needed, increment number at end of filename before extension
+                while os.path.exists(input_archive_path + archive_filename):
+                    archive_filename_temp = list(archive_filename)
+                    archive_filename_temp[-5] = str(int(archive_filename[-5:-4]) + 1)
+                    archive_filename = "".join(archive_filename_temp)
+
+# Make copies of the input & output files using copy2() which preserves modification time, etc.
+if make_archive_copies:
+    try:
+        shutil.copy2(INPUT_PATH + TRANSACTION_FILE, input_archive_path + archive_filename)
+    except (IOError, OSError), err_data:
+        warning("VIS Data Archive Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the VIS Data at " + input_archive_path + archive_filename + " failed due to the following low-level error:\n\n" + str(err_data))
+    try:
+        shutil.copy2(OUTPUT_PATH + OUTPUT_FILE, output_archive_path + archive_filename)
+    except (IOError, OSError), err_data:
+        warning("FA Data Archive Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the FA Data at " + output_archive_path + archive_filename + " failed due to the following low-level error:\n\n" + str(err_data))
+
+
+#############
+# All Done! #
+#############
+# Let user know the script is done and they should be able to import the file.
+# Lyrics: Elizabeth (Humphrey) Kuligowski
+subprocess.call(['zenity', '--info', '--title', "Success!", '--text', '<b>If all is well,\nIt will be there.\nReady for you\nTo import it too.\nPraise the Lord,\nOh my soul.\nPraise the Lord!</b>\n\n-- Elizabeth (Humphrey) Kuligowski\n\n\nVIS Export Total Amount: $' + str(input_total) + '\nFA Import Total Amount: $' + str(output_total)])
