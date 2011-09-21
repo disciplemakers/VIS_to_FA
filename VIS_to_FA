@@ -27,6 +27,7 @@
 import csv
 import subprocess
 import sys
+import optparse
 import os
 import os.path
 import shutil
@@ -44,11 +45,17 @@ def error(title, text, returncode):
     sys.exit(returncode)
 
 
+# Parse command-line options
+parser = optparse.OptionParser()
+parser.add_option("-d", "--debug", action="store_true",
+		  dest="debug_mode", help="run in debug mode")
+(options, args) = parser.parse_args()
+
 ####################
 # Define constants #
 ####################
 
-# Location of input and ouput CSV files
+# Location of input and output CSV files
 INPUT_PATH = '/home/share/Operations/Ministry Expenses/VIM/'
 OUTPUT_PATH = '/home/share/frontaccounting/'
 INPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS Extractions/'
@@ -56,11 +63,13 @@ OUTPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS FA Impo
 TRANSACTION_FILE = 'vis_transactions_export.csv'
 CARDHOLDER_ID_FILE = 'cardholder_id.csv'
 OUTPUT_FILE = 'VISToFrontAccounting.csv'
-# Test Paths
-#INPUT_PATH = 'orig/'
-#OUTPUT_PATH = './'
-#INPUT_ARCHIVE_BASE_PATH = 'archive_input/'
-#OUTPUT_ARCHIVE_BASE_PATH = 'archive_output/'
+
+# Use alternate locations for input and output when in debug mode.
+if options.debug_mode:
+    INPUT_PATH = 'orig/'
+    OUTPUT_PATH = './'
+    INPUT_ARCHIVE_BASE_PATH = 'archive_input/'
+    OUTPUT_ARCHIVE_BASE_PATH = 'archive_output/'
 
 # Types of transaction files we can handle
 CC = 0  # Credit Card
