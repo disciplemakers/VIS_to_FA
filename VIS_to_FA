@@ -35,6 +35,12 @@ import time
 import textwrap
 from decimal import *
 
+class Cardholder:
+    """A cardholder entry"""
+    def __init__(self, id, default_fund):
+        self.id = id
+	self.default_fund = default_fund
+
 # General purpose Warning function that uses Zenity
 def warning(title, text):
     subprocess.call(['zenity', '--warning', '--title', "Warning: " + title, '--text', "Warning: " + text])
@@ -178,13 +184,20 @@ transaction_file_date = time.strftime("%A, %B %d, %Y at %I:%M%p", time.localtime
 cardholder_csv_data = csv.reader(file(INPUT_PATH + CARDHOLDER_ID_FILE) )
 transaction_csv_data = csv.reader(file(INPUT_PATH + TRANSACTION_FILE))
 
+# Do a basic verification of correctness of Cardholder ID data by looking
+# at the header on the first line.
+if cardholder_csv_data.next()[0] != "CARDHOLDER_ID_0":
+    error("Unexpected Cardholder ID Format", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " doesn't appear to contain Cardholder ID data.  Unable to continue.", 1)
+
 # Make a convenient list of Cardholder IDs
 # Note: we only care about the ID itself, i.e. the first column
-cardholder_id_list = []
-for cardholder in cardholder_csv_data:
+cardholder_list = []
+for cardholder_row in cardholder_csv_data:
     # Ignore any duplicates
-    if cardholder[0] not in cardholder_id_list:
-        cardholder_id_list.append(cardholder[0])
+    cardholder = Cardholder(cardholder_row[0],
+		    	    cardholder_row[2])
+    if cardholder not in cardholder_list:
+        cardholder_list.append(cardholder)
 
 # Make a convenient list of the Transactions
 transaction_list = [] 
@@ -192,14 +205,11 @@ for transaction in transaction_csv_data:
     transaction_list.append(transaction)
 
 # Test to see if either of the input files are empty.
-if len(cardholder_id_list) < 2:
+if len(cardholder_list) < 2:
     error("Empty Input File", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " is empty.", 1)
 if len(transaction_list) < 2:
     error("Empty Input File", "Input file " + INPUT_PATH + TRANSACTION_FILE + " is empty.", 1)
 
-# Do a basic verification of correctness of Cardholder ID data
-if cardholder_id_list[0] != "CARDHOLDER_ID_0":
-    error("Unexpected Cardholder ID Format", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " doesn't appear to contain Cardholder ID data.  Unable to continue.", 1)
 
 # Figure out if we're dealing with Credit Card or non-Credit Card Transactions
 if transaction_list[0][0] == "CARDHOLDER_ID_0":
@@ -210,7 +220,7 @@ else:
     error("Unexpected Transaction Format", "Input file " + INPUT_PATH + TRANSACTION_FILE + " doesn't appear to contain Credit Card or Expense Report data.  Unable to continue.", 1)
     
 # Remove the CSV Headers row from each list
-del cardholder_id_list[0]
+#del cardholder_id_list[0]
 del transaction_list[0]
 
 
@@ -285,7 +295,7 @@ output_list.append([ 'Entry ID', 'Transaction Date', 'Reference Number',
 cardholder_counter = 1
 
 # We'll handle one person at a time.
-for cardholder in cardholder_id_list:
+for cardholder in cardholder_list:
     # Keep track of the total amount per person (negative amount for
     # proper accounting purposes)
     cardholder_sum = 0
@@ -318,7 +328,7 @@ That probably means there's something wrong with the export.  We'll ignore that 
 "\n<b>Description:</b> " + transaction[columns[transaction_file_type][DESCRIPTION]])
             continue
 
-        if transaction[columns[transaction_file_type][CARDHOLDER_ID]] == cardholder:
+        if transaction[columns[transaction_file_type][CARDHOLDER_ID]] == cardholder.id:
             cardholder_sum += Decimal(transaction[columns[transaction_file_type][AMOUNT]])*-1
 
             # Assemble all the output data for this transaction
