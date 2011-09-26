@@ -201,11 +201,10 @@ if len(transaction_list) < 2:
 if cardholder_id_list[0] != "CARDHOLDER_ID_0":
     error("Unexpected Cardholder ID Format", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " doesn't appear to contain Cardholder ID data.  Unable to continue.", 1)
 
-sys.stderr.write("transaction_list[0][0] = %s\n" % transaction_list[0][0])
 # Figure out if we're dealing with Credit Card or non-Credit Card Transactions
 if transaction_list[0][0] == "CARDHOLDER_ID_0":
     transaction_file_type = CC
-elif transaction_list[0][0].startswith("EXPENSE REPORT NAME"):
+elif transaction_list[0][0] == "REPORT_NAME_0":
     transaction_file_type = ER
 else:
     error("Unexpected Transaction Format", "Input file " + INPUT_PATH + TRANSACTION_FILE + " doesn't appear to contain Credit Card or Expense Report data.  Unable to continue.", 1)
