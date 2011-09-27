@@ -66,6 +66,7 @@ INPUT_PATH = '/home/share/Operations/Ministry Expenses/VIM/'
 OUTPUT_PATH = '/home/share/frontaccounting/'
 INPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS Extractions/'
 OUTPUT_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/VIS FA Imports/'
+CARDHOLDER_DATA_ARCHIVE_BASE_PATH = '/home/share/Operations/Ministry Expenses/Cardholder Data Archives/'
 TRANSACTION_FILE = 'vis_transactions_export.csv'
 CARDHOLDER_ID_FILE = 'cardholder_id.csv'
 OUTPUT_FILE = 'VISToFrontAccounting.csv'
@@ -76,6 +77,8 @@ if options.debug_mode:
     OUTPUT_PATH = './'
     INPUT_ARCHIVE_BASE_PATH = 'archive_input/'
     OUTPUT_ARCHIVE_BASE_PATH = 'archive_output/'
+    CARDHOLDER_DATA_ARCHIVE_BASE_PATH = 'archive_cardholder_data/'
+    
 
 # Types of transaction files we can handle
 CC = 0  # Credit Card
@@ -471,9 +474,12 @@ archive_filename = accounting_entry_date_year + '_' + accounting_entry_date_mont
 # Figure out paths
 input_archive_path = INPUT_ARCHIVE_BASE_PATH + accounting_entry_date_year + os.sep
 output_archive_path = OUTPUT_ARCHIVE_BASE_PATH + accounting_entry_date_year + os.sep
+cardholder_data_archive_path = CARDHOLDER_DATA_ARCHIVE_BASE_PATH + accounting_entry_date_year + os.sep
 
 # Make sure that archive paths, including subdirectories for year, exist and try to create them if they don't.
-for archive_path in [input_archive_path, output_archive_path]:
+for archive_path in [input_archive_path,
+		     output_archive_path,
+		     cardholder_data_archive_path]:
     if not os.path.exists(archive_path):
         try:
             os.makedirs(archive_path)
@@ -481,8 +487,10 @@ for archive_path in [input_archive_path, output_archive_path]:
             make_archive_copies = False
             if archive_path == input_archive_path:
                 warning("VIS Data Archive Folder Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the VIS Data failed because the archive folder location " + input_archive_path + "doesn't exist and an attempt to create it has failed due to the following low-level error:\n\n" + str(err_data))
-            else:
+	    elif archive_path == output_archive_path:
                 warning("FA Data Archive Folder Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the FA Data failed because the archive folder location " + output_archive_path + "doesn't exist and an attempt to create it has failed due to the following low-level error:\n\n" + str(err_data))
+	    else:
+                warning("Cardholder Data Archive Folder Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the Cardholder data failed because the archive folder location " + cardholder_data_archive_path + "doesn't exist and an attempt to create it has failed due to the following low-level error:\n\n" + str(err_data))
 
 # Define user options for handling an archive filename conflict
 OPTION_QUIT = "Quit without archiving so I can start over"
@@ -490,16 +498,21 @@ OPTION_OVERWRITE = "Overwrite the existing archive files, I know what I'm doing"
 OPTION_NEW_NAME = "Create new archive files, this is different data for the same date & type"
 
 # Ask the user what to do if either archive file already exists
-if make_archive_copies and (os.path.exists(input_archive_path + archive_filename) or os.path.exists(output_archive_path + archive_filename)):
+if make_archive_copies and (os.path.exists(input_archive_path +
+					   archive_filename) or
+		            os.path.exists(output_archive_path +
+				    	   archive_filename) or
+			    os.path.exists(cardholder_data_archive_path +
+				           archive_filename)):
     archive_filename_in_use_process = subprocess.Popen(['zenity', '--list', '--radiolist', '--title', 'Archive Filename Is In Use', '--text', 
-                               "<b>The main FA Import file was created and is ready to be imported into FrontAccounting.\nHowever, the filename where the VIS export file or FA Import file would be archived already exists.</b>\n\n" + textwrap.fill("If you're redoing a VIS to FA conversion then it's fine to overwrite what's already there.  But if that's not the case, it probably means that you selected the wrong Posting Date for when entries will be posted in the Accounting System in which case it would be best to quit and start over.  Or it could be that you actually have different data of the same kind for the same posting date, in which case it would be best to save under a different name.", 100, replace_whitespace=False) + "\n\n<b><big>What would you like to do?</big></b>",
+                               "<b>The main FA Import file was created and is ready to be imported into FrontAccounting.\nHowever, the filename where the VIS export file, FA Import file, or Cardholder Data file would be archived already exists.</b>\n\n" + textwrap.fill("If you're redoing a VIS to FA conversion then it's fine to overwrite what's already there.  But if that's not the case, it probably means that you selected the wrong Posting Date for when entries will be posted in the Accounting System in which case it would be best to quit and start over.  Or it could be that you actually have different data of the same kind for the same posting date, in which case it would be best to save under a different name.", 100, replace_whitespace=False) + "\n\n<b><big>What would you like to do?</big></b>",
                                '--hide-header', '--column', 'col1', '--column', 'col2', 'FALSE', OPTION_QUIT, 'TRUE', OPTION_OVERWRITE, "FALSE", OPTION_NEW_NAME], stdout=subprocess.PIPE)
     archive_filename_in_use_process.wait()
 
     # User clicked Cancel button
     if archive_filename_in_use_process.returncode == 1:
         make_archive_copies = False
-        warning("Archives Were Not Made", "Archive copies of VIS Export and FA Import data were not made automatically.")
+        warning("Archives Were Not Made", "Archive copies of VIS Export, FA Import, and Cardholder data were not made automatically.")
     else:
         # Collect the option the user selected
         archive_filename_in_use_choice = archive_filename_in_use_process.communicate()[0].strip()
@@ -533,6 +546,10 @@ if make_archive_copies:
     except (IOError, OSError), err_data:
         warning("FA Data Archive Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the FA Data at " + output_archive_path + archive_filename + " failed due to the following low-level error:\n\n" + str(err_data))
 
+    try:
+        shutil.copy2(INPUT_PATH + CARDHOLDER_ID_FILE, cardholder_data_archive_path + archive_filename)
+    except (IOError, OSError), err_data:
+        warning("Cardholder Data Archive Problem", "The main FA Import file was created and is ready to be imported into FrontAccounting.  However, the attempt to make an archive copy of the Cardholder Data at " + cardholder_data_archive_path + archive_filename + " failed due to the following low-level error:\n\n" + str(err_data))
 
 #############
 # All Done! #
