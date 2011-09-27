@@ -39,7 +39,7 @@ class Cardholder:
     """A cardholder entry"""
     def __init__(self, id, default_fund):
         self.id = id
-	self.default_fund = default_fund
+	self.default_fund = default_fund.split('|', 1)[0]
 
 # General purpose Warning function that uses Zenity
 def warning(title, text):
@@ -359,15 +359,19 @@ That means it should not have been approved, or else this program needs to be up
                 Dimension2 = BOOKTABLE_DIMENSION_2
             else:
                 if transaction[columns[transaction_file_type][FUND]] == "":
-                    error("Transaction is Missing Required Fund",
-                            "The transaction on <b>line " + str(line) + " has a blank fund</b> and that's not allowed for this transaction. \
+		    if transaction_file_type == ER:
+		        # Fill in the cardholder's fund as a default.
+			Dimension1 = cardholder.default_fund
+		    else:
+                        error("Transaction is Missing Required Fund",
+                              "The transaction on <b>line " + str(line) + " has a blank fund</b> and that's not allowed for this transaction. \
 That means it should not have been approved, or else this program needs to be updated.  Please fix data in VIS and re-export.\n\n\
 <b><u>Transaction details</u></b>\n<b>Transaction Date:</b> " + transaction[columns[transaction_file_type][TRANSACTION_DATE]] +
 "\n<b>Cardholder Name:</b> " + transaction[columns[transaction_file_type][CARDHOLDER_NAME]] +
 "\n<b>Description:</b> " + transaction[columns[transaction_file_type][DESCRIPTION]], 1)
                 else:
                     Dimension1 = transaction[columns[transaction_file_type][FUND]]
-                    Dimension2 = transaction[columns[transaction_file_type][BUDGET_NAME]]
+                Dimension2 = transaction[columns[transaction_file_type][BUDGET_NAME]]
 
             Amount = transaction[columns[transaction_file_type][AMOUNT]]
 
