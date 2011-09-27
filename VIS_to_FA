@@ -189,8 +189,7 @@ transaction_csv_data = csv.reader(file(INPUT_PATH + TRANSACTION_FILE))
 if cardholder_csv_data.next()[0] != "CARDHOLDER_ID_0":
     error("Unexpected Cardholder ID Format", "Input file " + INPUT_PATH + CARDHOLDER_ID_FILE + " doesn't appear to contain Cardholder ID data.  Unable to continue.", 1)
 
-# Make a convenient list of Cardholder IDs
-# Note: we only care about the ID itself, i.e. the first column
+# Make a convenient list of Cardholders
 cardholder_list = []
 for cardholder_row in cardholder_csv_data:
     # Ignore any duplicates
@@ -332,11 +331,8 @@ That probably means there's something wrong with the export.  We'll ignore that 
             cardholder_sum += Decimal(transaction[columns[transaction_file_type][AMOUNT]])*-1
 
             # Assemble all the output data for this transaction
-
             Entry_ID = cardholder_counter
-
             Date = accounting_entry_date
-
             Reference = reference_number_prefix + str(reference_number_suffix)
 
             if transaction[columns[transaction_file_type][EXPENSE_ACCOUNT_NUM]] == "":
@@ -359,6 +355,7 @@ That means it should not have been approved, or else this program needs to be up
                 Dimension2 = BOOKTABLE_DIMENSION_2
             else:
                 if transaction[columns[transaction_file_type][FUND]] == "":
+	            # We want to handle blank funds for non-CC exports.
 		    if transaction_file_type == ER:
 		        # Fill in the cardholder's fund as a default.
 			Dimension1 = cardholder.default_fund
