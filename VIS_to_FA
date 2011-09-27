@@ -50,7 +50,6 @@ def error(title, text, returncode):
     subprocess.call(['zenity', '--error', '--title', "ERROR: " + title, '--text', "ERROR: " + text + "\n\nPlease fix the problem and try again."])
     sys.exit(returncode)
 
-
 # Parse command-line options
 parser = optparse.OptionParser()
 parser.add_option("-d", "--debug", action="store_true",
@@ -497,7 +496,7 @@ OPTION_QUIT = "Quit without archiving so I can start over"
 OPTION_OVERWRITE = "Overwrite the existing archive files, I know what I'm doing"
 OPTION_NEW_NAME = "Create new archive files, this is different data for the same date & type"
 
-# Ask the user what to do if either archive file already exists
+# Ask the user what to do if any of the archive files already exist.
 if make_archive_copies and (os.path.exists(input_archive_path +
 					   archive_filename) or
 		            os.path.exists(output_archive_path +
@@ -535,7 +534,8 @@ if make_archive_copies and (os.path.exists(input_archive_path +
                     archive_filename_temp[-5] = str(int(archive_filename[-5:-4]) + 1)
                     archive_filename = "".join(archive_filename_temp)
 
-# Make copies of the input & output files using copy2() which preserves modification time, etc.
+# Make copies of the input, output, and cardholder data files using copy2()
+# which preserves modification time, etc.
 if make_archive_copies:
     try:
         shutil.copy2(INPUT_PATH + TRANSACTION_FILE, input_archive_path + archive_filename)
